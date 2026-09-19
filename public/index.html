@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b0c0f" />
+    <title>Talkback — voice rooms with barge-in</title>
+    <meta
+      name="description"
+      content="Audio-only WebRTC rooms with browser acoustic echo cancellation. Interrupt the other party on laptop speakers without feedback."
+    />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="grain" aria-hidden="true"></div>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <img class="logo-img" src="/favicon.svg" width="42" height="42" alt="" />
+          <div>
+            <h1>Talkback</h1>
+            <p>Full-duplex voice · browser AEC</p>
+          </div>
+        </div>
+        <div class="top-status" aria-live="polite">
+          <span id="aec-badge" class="badge badge-on">AEC on</span>
+          <span id="scenario-badge" class="badge badge-live">Speakers</span>
+          <span id="browser-badge" class="badge">Browser</span>
+          <span id="conn-badge" class="badge">Idle</span>
+        </div>
+      </header>
+
+      <div class="layout">
+        <main class="stage">
+          <section id="lobby" class="panel lobby">
+            <p class="eyebrow">Share a room · keep the mic open</p>
+            <h2>Join a voice room</h2>
+            <p class="lede">
+              Open this link in two Chrome tabs (or send the room code). Allow the microphone once — that gesture also unlocks playback.
+              Talk over each other. Echo cancellation should stop laptop speakers from feeding back.
+            </p>
+            <form id="join-form" class="join-form">
+              <label class="field">
+                <span>Room code</span>
+                <div class="code-row">
+                  <input id="room-input" name="room" maxlength="32" autocomplete="off" spellcheck="false" inputmode="text" />
+                  <button type="button" class="icon-btn" id="shuffle-btn" title="New room code" aria-label="Generate a new room code">
+                    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                      <path fill="currentColor" d="M7.5 6h2.2l-3 3H4L8.5 4 13 9H10.8l-1.8-1.8V12H7.5V7.2zm9 12h-2.2l3-3H20L15.5 20 11 15h2.2l1.8 1.8V12H16.5v4.8zM14 7l1.8 1.8L17.5 7H20l-4.5 5L11 7h3zm-4 10-1.8-1.8L6.5 17H4l4.5-5L13 17h-3z" />
+                    </svg>
+                  </button>
+                </div>
+              </label>
+              <div class="join-actions">
+                <button type="submit" class="btn btn-primary" id="join-btn">Join room</button>
+                <button type="button" class="btn btn-ghost" id="copy-link-btn">Copy link</button>
+                <button type="button" class="btn btn-ghost" id="copy-code-btn">Copy code</button>
+              </div>
+            </form>
+            <div class="join-actions lobby-extra">
+              <button type="button" class="btn btn-ghost" id="tone-btn">Play test tone</button>
+              <button type="button" class="btn btn-secondary" id="loopback-btn">Loopback self-test — one tab</button>
+            </div>
+            <p class="fineprint" id="tone-status">Test tone checks the speaker. Loopback should be done on headphones so you don’t howl into the mic.</p>
+            <p id="lobby-error" class="error" hidden></p>
+          </section>
+
+          <section id="call" class="panel call" hidden>
+            <div class="call-meta">
+              <div>
+                <p class="eyebrow" id="mode-label">Room</p>
+                <h2 id="room-title">—</h2>
+              </div>
+              <div class="call-share">
+                <button type="button" class="btn btn-ghost btn-small" id="call-copy-link">Copy link</button>
+                <p id="peer-status" class="peer-status">Waiting for a peer…</p>
+              </div>
+            </div>
+
+            <p id="reconnect-banner" class="banner banner-live" hidden>
+              Signaling dropped. Reconnecting…
+              <button type="button" class="btn btn-tiny" id="reconnect-now-btn">Retry now</button>
+            </p>
+            <p id="pc-failed" class="banner banner-off" hidden>Peer connection failed or a remote track ended. Rejoin if it stays silent — that is not an AEC bug.</p>
+            <p id="graph-blocked" class="banner" hidden>
+              Audio graph is suspended (meters / unlock).
+              <button type="button" class="btn btn-tiny" id="resume-graph-btn">Tap to resume</button>
+            </p>
+            <p id="muted-speaking" class="banner banner-off" hidden>You’re muted but the mic meter is moving. Unmute to barge in.</p>
+
+            <div class="scenario" role="group" aria-label="Listening setup">
+              <button type="button" class="chip chip-on" id="scenario-speakers">Speakers</button>
+              <button type="button" class="chip" id="scenario-headphones">Headphones</button>
+              <p id="scenario-tip" class="scenario-tip">AEC stays on · volume ~50–60% · wait ~2s for the canceller to converge</p>
+            </div>
+
+            <p id="live-hud" class="live-hud">Mic: — · AEC: — · NS: — · AGC: —</p>
+            <p id="live-hud-remote" class="live-hud live-hud-sub">Remote: — · ICE: — · RTT: —</p>
+
+            <section class="aec-card" id="aec-card">
+              <div class="aec-card-top">
+                <div>
+                  <p class="eyebrow">Compare</p>
+                  <h3>Echo cancellation</h3>
+                  <p class="aec-sub" id="aec-sub">
+                    Mic stays open on purpose. Browser AEC (Chrome AEC3, <code>echoCancellation: "all"</code> when available) removes speaker echo so you can interrupt.
+                  </p>
+                </div>
+                <button type="button" class="switch" id="aec-btn" role="switch" aria-checked="true">
+                  <span class="switch-track"><span class="switch-knob"></span></span>
+                  <span class="switch-text" id="aec-switch-label">On</span>
+                </button>
+              </div>
+              <p class="aec-warn" id="aec-warn" hidden>
+                AEC is off. On speakers this often howls — that is the comparison. Turn it back on after you hear the difference.
+              </p>
+            </section>
+
+            <div class="meters" aria-label="Voice levels">
+              <div class="meter-card">
+                <div class="ring" data-meter="local">
+                  <span class="ring-label">You</span>
+                </div>
+                <p id="local-meter-caption">Mic live · leave it unmuted to barge in</p>
+              </div>
+              <div class="meter-card meter-remote">
+                <div class="ring remote" data-meter="remote">
+                  <span class="ring-label">Them</span>
+                </div>
+                <p id="remote-meter-caption">No remote audio</p>
+              </div>
+            </div>
+
+            <div class="output-well">
+              <div>
+                <p class="output-label">Far-end speaker · AEC reference</p>
+                <p class="output-hint">Unmuted <code>&lt;audio autoplay playsInline&gt;</code> from <code>pc.ontrack</code>. Meters clone the stream silently and never play it.</p>
+              </div>
+              <div id="remote-sinks" class="remote-sinks"></div>
+            </div>
+
+            <div class="controls" role="toolbar" aria-label="Call controls">
+              <button type="button" class="ctrl" id="mic-btn" aria-pressed="false">
+                <svg class="ctrl-svg" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1A7 7 0 0 0 19 11h-2z"/></svg>
+                <span class="ctrl-label">Mute mic</span>
+              </button>
+              <button type="button" class="ctrl" id="speaker-btn" aria-pressed="false">
+                <svg class="ctrl-svg" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 9v6h4l5 5V4L8 9H4zm13.5 3c0-1.8-1-3.3-2.5-4v8c1.5-.7 2.5-2.2 2.5-4zM16 6.3v-.7l-1.4 1.4A6.97 6.97 0 0 1 18.5 12a7 7 0 0 1-3.9 6.3L16 19.7V19a8.5 8.5 0 0 0 0-13.7z"/></svg>
+                <span class="ctrl-label">Mute speaker</span>
+              </button>
+              <button type="button" class="ctrl" id="pause-remote-btn" aria-pressed="false">
+                <svg class="ctrl-svg" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M8 5h3v14H8V5zm5 0h3v14h-3V5z"/></svg>
+                <span class="ctrl-label">Interrupt</span>
+              </button>
+              <button type="button" class="ctrl ctrl-danger" id="hangup-btn">
+                <svg class="ctrl-svg" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 1 0 .01 20.01A10 10 0 0 0 12 2zm3.5 12.1L14.1 15.5 12 13.4l-2.1 2.1-1.4-1.4 2.1-2.1-2.1-2.1 1.4-1.4 2.1 2.1 2.1-2.1 1.4 1.4-2.1 2.1 2.1 2.1z"/></svg>
+                <span class="ctrl-label">Hang up</span>
+              </button>
+            </div>
+
+            <dl class="settings-readout" id="settings-readout">
+              <div>
+                <dt>Requested AEC</dt>
+                <dd id="aec-requested">ideal: "all"</dd>
+              </div>
+              <div>
+                <dt>Applied getSettings()</dt>
+                <dd id="aec-applied">—</dd>
+              </div>
+              <div>
+                <dt>Noise suppress</dt>
+                <dd id="ns-applied">—</dd>
+              </div>
+              <div>
+                <dt>Auto gain</dt>
+                <dd id="agc-applied">—</dd>
+              </div>
+              <div>
+                <dt>Sample rate · channels</dt>
+                <dd id="format-applied">—</dd>
+              </div>
+              <div>
+                <dt>Capabilities</dt>
+                <dd id="aec-caps">—</dd>
+              </div>
+            </dl>
+            <p id="call-error" class="error" hidden></p>
+            <p id="audio-blocked" class="banner" hidden>
+              Autoplay blocked this tab’s speaker.
+              <button type="button" class="btn btn-tiny" id="enable-audio-btn">Enable audio</button>
+            </p>
+            <p id="mic-muted-note" class="fineprint call-note" hidden>
+              Mic is muted. That is half-duplex — the other party cannot hear an interrupt until you unmute.
+            </p>
+            <p id="speaker-muted-note" class="fineprint call-note" hidden>
+              Speaker is muted, so AEC has no far-end reference to cancel.
+            </p>
+            <p id="interrupt-metric" class="fineprint call-note" hidden></p>
+          </section>
+        </main>
+
+        <aside class="tips">
+          <h3>How to test barge-in</h3>
+          <ol class="steps">
+            <li>Join the same room in two tabs. Keep both mics <strong>unmuted</strong>.</li>
+            <li>One side talks for a few seconds (AEC needs ~1–4s of far-end audio to converge).</li>
+            <li>The other side interrupts mid-sentence. You should hear the interruption, not a howl.</li>
+            <li>Flip <strong>Echo cancellation</strong> off, then on, to compare.</li>
+          </ol>
+
+          <div class="split-tips">
+            <article>
+              <h4>Speakers</h4>
+              <p>This is the real AEC test. Laptop speaker → mic is the echo path. Chrome recommended.</p>
+            </article>
+            <article>
+              <h4>Headphones</h4>
+              <p>Almost no acoustic echo, so barge-in always feels clean. Use them when AEC struggles (Bluetooth, two laptops in one room).</p>
+            </article>
+          </div>
+
+          <ul class="tips-list">
+            <li><strong>Chrome / Edge</strong> ship AEC3. Firefox speakerphone is weaker. Safari is usually strong on Apple hardware.</li>
+            <li><strong>Interrupt</strong> pauses far-end audio locally (target &lt;200ms) — the software stop voice agents use on TTS. Resume to hear them again. Human barge-in does not require this; AEC + open mic is the real test.</li>
+            <li>Loopback self-test plays your mic back through WebRTC in this tab — AEC on should not ring; AEC off often does on speakers.</li>
+          </ul>
+          <p class="fineprint">
+            Constraints are requests.
+            <a href="https://developer.mozilla.org/en-US/docs/Web/API/MediaTrackConstraints/echoCancellation" target="_blank" rel="noreferrer">MDN echoCancellation</a>
+            documents boolean and Chrome 141+ <code>"all"</code> / <code>"remote-only"</code>.
+            Trust the HUD’s <code>getSettings()</code> value.
+          </p>
+        </aside>
+      </div>
+    </div>
+    <script type="module" src="/app.js?v=20260917g"></script>
+  </body>
+</html>

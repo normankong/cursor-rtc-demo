@@ -1,0 +1,17 @@
+{
+  "name": "talkback",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "WebRTC voice rooms with browser acoustic echo cancellation for barge-in.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "ws": "^8.18.3"
+  }
+}
