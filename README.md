@@ -114,3 +114,10 @@ public/app.js      Capture, mesh WebRTC, AEC toggle, reconnect, loopback, VU
 ```
 
 `npm start` listens on port **3847** (`PORT` overrides).
+
+## GitHub Pages (barge-in lab only)
+
+Static barge-in lab: **https://normankong.github.io/cursor-rtc-demo/**
+
+WebRTC rooms still need `npm start` (Node + `/ws`). Pages hosts `docs/index.html` only.
+

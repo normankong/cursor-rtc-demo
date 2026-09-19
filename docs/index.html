@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Talkback barge-in lab (GitHub Pages snapshot)</title>
+  <style>
+    :root { color-scheme: dark; font-family: ui-sans-serif, system-ui, sans-serif; }
+    body { margin: 0; background: #0b0c0f; color: #e8eaed; padding: 24px; line-height: 1.45; }
+    main { max-width: 640px; margin: 0 auto; }
+    h1 { font-size: 1.25rem; margin: 0 0 8px; }
+    p { color: #9aa0a6; margin: 0 0 16px; }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; align-items: center; }
+    button {
+      appearance: none; border: 0; border-radius: 10px; padding: 12px 16px;
+      font: inherit; font-weight: 600; cursor: pointer; background: #3b82f6; color: white;
+    }
+    button.secondary { background: #2a2f3a; }
+    button.danger { background: #b91c1c; }
+    button.warn { background: #b45309; }
+    button.aec-on { outline: 2px solid #86efac; }
+    button.aec-off { outline: 2px solid #fca5a5; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    label.ctrl { color: #9aa0a6; font-size: 13px; display: flex; gap: 8px; align-items: center; }
+    #status {
+      margin: 16px 0; padding: 14px 16px; border-radius: 12px;
+      background: #151922; border: 1px solid #2a2f3a; font-weight: 600;
+    }
+    #status.speak { border-color: #3b82f6; color: #93c5fd; }
+    #status.hold { border-color: #f59e0b; color: #fcd34d; }
+    #status.barge { border-color: #f59e0b; color: #fcd34d; background: #2a1f0a; }
+    #status.listen { border-color: #22c55e; color: #86efac; }
+    .meter, .hold {
+      height: 10px; background: #1f2430; border-radius: 999px; overflow: hidden;
+      margin: 8px 0 4px; position: relative;
+    }
+    .hold { height: 8px; margin-bottom: 8px; }
+    #hist {
+      position: absolute; left: 0; top: 0; bottom: 0; width: 0%;
+      background: #a855f7; opacity: 0.55; border-radius: 999px;
+    }
+    #level { position: relative; z-index: 1; display: block; height: 100%; width: 0%; background: #22c55e; border-radius: 999px; }
+    #holdBar { display: block; height: 100%; width: 0%; background: #f59e0b; }
+    #thrMark { position: absolute; top: -2px; bottom: -2px; width: 2px; background: #f59e0b; left: 0; z-index: 2; }
+    #histMark {
+      position: absolute; top: -2px; bottom: -2px; width: 2px; background: #c084fc; left: 0; z-index: 2;
+    }
+    .legend { font-size: 12px; color: #9aa0a6; margin: 0 0 4px; }
+    .legend span { margin-right: 12px; }
+    .legend .g { color: #22c55e; }
+    .legend .p { color: #c084fc; }
+    .legend .o { color: #f59e0b; }
+    .live { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: #c4c7ce; margin-bottom: 16px; }
+    pre {
+      background: #151922; border: 1px solid #2a2f3a; border-radius: 12px;
+      padding: 12px; white-space: pre-wrap; color: #c4c7ce;
+      font-family: ui-monospace, Menlo, monospace; font-size: 12px;
+    }
+    a { color: #93c5fd; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Barge-in lab</h1>
+    <p>
+      Set <strong>Threshold</strong> yourself under your purple peak (or use “Thr = 70% peak”). Tell me the value that works and we’ll make it the default.
+      A <strong>brief flash</strong> over orange does not count — green must stay above orange until the hold bar fills
+      (default 150ms, with a couple of grace frames so tiny dips don’t reset you).
+      <span style="opacity:.5">Rooms (not on Pages — needs Node/WS)</span>
+    </p>
+
+    <div class="row">
+      <button id="startBtn" type="button">1. Enable mic</button>
+      <button id="talkBtn" type="button" class="secondary" disabled>2. Agent starts talking</button>
+      <button id="stopBtn" type="button" class="danger" disabled>Stop</button>
+      <button id="aecBtn" type="button" class="warn aec-on" disabled>AEC: ON</button>
+    </div>
+    <div class="row">
+      <label class="ctrl">Threshold (manual)
+        <input id="thr" type="range" min="0.002" max="0.04" step="0.001" value="0.010" />
+        <span id="thrVal">0.010</span>
+      </label>
+      <button id="setFromPeakBtn" type="button" class="secondary" disabled title="Set thr to 70% of purple peak">Thr = 70% peak</button>
+      <label class="ctrl">Hold ms
+        <input id="hold" type="range" min="10" max="300" step="10" value="150" />
+        <span id="holdVal">150</span>
+      </label>
+    </div>
+    <div class="row">
+      <label class="ctrl" title="Only used if you click Auto thr">
+        <input id="autoThr" type="checkbox" />
+        Auto thr from baseline
+      </label>
+      <label class="ctrl" id="sensWrap" style="opacity:0.45;pointer-events:none">Sensitivity
+        <input id="sens" type="range" min="1" max="10" value="9" />
+        <span id="sensVal">9</span>
+      </label>
+    </div>
+
+    <div id="status">Idle — enable the mic first</div>
+    <div class="legend">
+      <span class="g">■ live rms</span>
+      <span class="p">■ peak hist</span>
+      <span class="o">| threshold</span>
+    </div>
+    <div class="meter"><span id="hist"></span><span id="level"></span><i id="histMark"></i><i id="thrMark"></i></div>
+    <div class="row" style="margin-top:0">
+      <button id="resetPeakBtn" type="button" class="secondary" disabled>Reset peak / max hold</button>
+    </div>
+    <div>Hold progress (must fill) · purple text = longest above thr this session</div>
+    <div class="hold"><span id="holdBar"></span></div>
+    <div class="live" id="live">rms=— thr=—</div>
+    <div class="live" id="holdLive" style="color:#c084fc;margin-top:-12px">max above thr: —</div>
+
+    <pre id="hud">AEC: —</pre>
+    <pre id="log"></pre>
+  </main>
+  <script type="module">
+    const SCRIPT = [
+      "Sure — here is a longer answer so you have time to interrupt me.",
+      "Acoustic echo cancellation removes the speaker sound from the microphone,",
+      "so the system can tell that you started talking while I was still speaking.",
+      "When barge-in is detected, a real voice agent should stop TTS immediately,",
+      "cancel the remaining speech, and listen to your new request.",
+      "Keep talking over me now if you want to test the interrupt.",
+      "I will keep going with filler detail about weather, recipes, travel tips,",
+      "and product comparisons until you cut me off. One, two, three, four, five,",
+      "six, seven, eight, nine, ten. Still speaking. Still speaking. Still speaking.",
+    ].join(" ");
+
+    const els = {
+      startBtn: document.getElementById("startBtn"),
+      talkBtn: document.getElementById("talkBtn"),
+      stopBtn: document.getElementById("stopBtn"),
+      aecBtn: document.getElementById("aecBtn"),
+      status: document.getElementById("status"),
+      level: document.getElementById("level"),
+      thrMark: document.getElementById("thrMark"),
+      holdBar: document.getElementById("holdBar"),
+      live: document.getElementById("live"),
+      holdLive: document.getElementById("holdLive"),
+      hist: document.getElementById("hist"),
+      histMark: document.getElementById("histMark"),
+      resetPeakBtn: document.getElementById("resetPeakBtn"),
+      hud: document.getElementById("hud"),
+      log: document.getElementById("log"),
+      thr: document.getElementById("thr"),
+      thrVal: document.getElementById("thrVal"),
+      setFromPeakBtn: document.getElementById("setFromPeakBtn"),
+      autoThr: document.getElementById("autoThr"),
+      sensWrap: document.getElementById("sensWrap"),
+      sens: document.getElementById("sens"),
+      sensVal: document.getElementById("sensVal"),
+      hold: document.getElementById("hold"),
+      holdVal: document.getElementById("holdVal"),
+    };
+
+    const state = {
+      stream: null,
+      ctx: null,
+      source: null,
+      analyser: null,
+      data: null,
+      raf: 0,
+      speaking: false,
+      barged: false,
+      aecEnabled: true,
+      track: null,
+      baseline: 0.01,
+      threshold: 0.012,
+      aboveMs: 0,
+      lastTs: 0,
+      belowFrames: 0,
+      calibUntil: 0,
+      crossedLogged: false,
+      histPeak: 0,
+      maxAboveMs: 0,
+      curAboveMs: 0,
+    };
+
+    function holdMs() { return Number(els.hold.value) || 150; }
+
+    function readManualThreshold() {
+      return Number(els.thr.value) || 0.01;
+    }
+
+    function applyManualThreshold() {
+      state.threshold = readManualThreshold();
+      els.thrVal.textContent = state.threshold.toFixed(3);
+      updateHud();
+    }
+
+    function recomputeThreshold() {
+      if (!els.autoThr.checked) {
+        state.threshold = readManualThreshold();
+        return;
+      }
+      const s = Number(els.sens.value) || 9;
+      const factor = 2.4 - s * 0.16;
+      const floor = 0.004 + (10 - s) * 0.0015;
+      const ceil = 0.05;
+      state.threshold = Math.min(ceil, Math.max(floor, state.baseline * Math.max(0.85, factor) + floor * 0.4));
+      // Mirror into slider so you can see what auto chose, then uncheck to lock.
+      els.thr.value = String(Math.round(state.threshold * 1000) / 1000);
+      els.thrVal.textContent = state.threshold.toFixed(3);
+    }
+
+    function syncAutoUi() {
+      const on = els.autoThr.checked;
+      els.sensWrap.style.opacity = on ? "1" : "0.45";
+      els.sensWrap.style.pointerEvents = on ? "auto" : "none";
+      els.thr.disabled = on;
+      if (!on) applyManualThreshold();
+      else recomputeThreshold();
+      updateHud();
+    }
+
+    function log(msg) {
+      const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      console.log("[BargeIn]", msg);
+      els.log.textContent = `${line}\n` + els.log.textContent.split("\n").slice(0, 60).join("\n");
+    }
+
+    function setStatus(text, kind = "") {
+      els.status.textContent = text;
+      els.status.className = kind;
+    }
+
+    function rms() {
+      if (!state.analyser) return 0;
+      state.analyser.getByteTimeDomainData(state.data);
+      let sum = 0;
+      for (let i = 0; i < state.data.length; i++) {
+        const v = (state.data[i] - 128) / 128;
+        sum += v * v;
+      }
+      return Math.sqrt(sum / state.data.length);
+    }
+
+    function updateAecBtn() {
+      els.aecBtn.textContent = state.aecEnabled ? "AEC: ON" : "AEC: OFF";
+      els.aecBtn.classList.toggle("aec-on", state.aecEnabled);
+      els.aecBtn.classList.toggle("aec-off", !state.aecEnabled);
+    }
+
+    function updateHud() {
+      const s = state.track?.getSettings?.() || {};
+      els.hud.textContent = [
+        `requested AEC: ${state.aecEnabled}`,
+        `applied echoCancellation: ${JSON.stringify(s.echoCancellation)}`,
+        `noiseSuppression: ${s.noiseSuppression} · autoGainControl: ${s.autoGainControl}`,
+        `baseline: ${state.baseline.toFixed(3)} · thr: ${state.threshold.toFixed(3)} · peak: ${state.histPeak.toFixed(3)} · maxAbove: ${Math.round(state.maxAboveMs)}ms · hold need: ${holdMs()}ms`,
+        `thr mode: ${els.autoThr.checked ? "auto" : "manual"} · stay above thr for hold ms (2-frame grace)`,
+      ].join("\n");
+    }
+
+
+    function resetHistPeak(reason = "manual") {
+      state.histPeak = 0;
+      state.maxAboveMs = 0;
+      state.curAboveMs = 0;
+      els.hist.style.width = "0%";
+      els.histMark.style.left = "0%";
+      if (els.holdLive) els.holdLive.textContent = "max above thr: — · current streak: 0ms";
+      log(`peak/hold hist reset (${reason})`);
+    }
+
+    function teardownGraph() {
+      try { state.source?.disconnect(); } catch {}
+      state.source = null;
+      for (const t of state.stream?.getTracks?.() || []) t.stop();
+      state.stream = null;
+      state.track = null;
+    }
+
+    async function openMic() {
+      const audio = {
+        echoCancellation: state.aecEnabled ? { ideal: "all" } : false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        channelCount: 1,
+      };
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio, video: false });
+      } catch (err) {
+        if (!state.aecEnabled) throw err;
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: false, autoGainControl: false },
+          video: false,
+        });
+      }
+      teardownGraph();
+      state.stream = stream;
+      state.track = stream.getAudioTracks()[0];
+      if (!state.ctx) state.ctx = new AudioContext();
+      await state.ctx.resume();
+      state.source = state.ctx.createMediaStreamSource(stream);
+      state.analyser = state.ctx.createAnalyser();
+      state.analyser.fftSize = 2048;
+      state.analyser.smoothingTimeConstant = 0.15;
+      state.data = new Uint8Array(state.analyser.fftSize);
+      state.source.connect(state.analyser);
+      updateHud();
+      updateAecBtn();
+      log(`mic live · AEC requested=${state.aecEnabled} applied=${JSON.stringify(state.track.getSettings().echoCancellation)}`);
+    }
+
+    function meterLoop() {
+      cancelAnimationFrame(state.raf);
+      state.lastTs = 0;
+      const tick = (ts) => {
+        const dt = state.lastTs ? Math.min(50, ts - state.lastTs) : 16;
+        state.lastTs = ts;
+        const level = rms();
+        const need = holdMs();
+
+        if (level > state.histPeak) state.histPeak = level;
+        const scale = 2500;
+        els.hist.style.width = `${Math.min(100, state.histPeak * scale)}%`;
+        els.histMark.style.left = `${Math.min(100, state.histPeak * scale)}%`;
+        els.level.style.width = `${Math.min(100, level * scale)}%`;
+        els.thrMark.style.left = `${Math.min(100, state.threshold * scale)}%`;
+
+        // Longest continuous time above threshold (measure anytime mic is live)
+        if (level >= state.threshold) {
+          state.curAboveMs += dt;
+          if (state.curAboveMs > state.maxAboveMs) state.maxAboveMs = state.curAboveMs;
+        } else {
+          state.belowStreak = (state.belowStreak || 0) + 1;
+          if (state.belowStreak > 2) state.curAboveMs = 0;
+        }
+        if (level >= state.threshold) state.belowStreak = 0;
+        if (els.holdLive) {
+          els.holdLive.textContent =
+            `max above thr: ${Math.round(state.maxAboveMs)}ms · current streak: ${Math.round(state.curAboveMs)}ms`;
+        }
+
+        if (state.speaking && !state.barged) {
+          const now = performance.now();
+          // Strong absolute speech always wins, even during calib.
+          const strong = level >= Math.max(0.018, state.threshold * 1.4);
+          if (now < state.calibUntil && !strong) {
+            state.baseline = Math.min(0.012, state.baseline * 0.85 + level * 0.15);
+            recomputeThreshold();
+            updateHud();
+            state.aboveMs = 0;
+            state.belowFrames = 0;
+          } else {
+            if (level < state.threshold * 0.7) {
+              state.baseline = Math.min(0.012, state.baseline * 0.998 + level * 0.002);
+              recomputeThreshold();
+            }
+
+            if (level >= state.threshold || strong) {
+              if (!state.crossedLogged) {
+                log(`above thr · rms=${level.toFixed(3)} thr=${state.threshold.toFixed(3)} — keep holding`);
+                state.crossedLogged = true;
+              }
+              state.belowFrames = 0;
+              state.aboveMs += dt;
+              setStatus(
+                `Above threshold — hold ${Math.min(need, Math.round(state.aboveMs))}/${need}ms`,
+                "hold"
+              );
+              if (state.aboveMs >= need) {
+                bargeIn(`rms=${level.toFixed(3)} thr=${state.threshold.toFixed(3)} held=${Math.round(state.aboveMs)}ms`);
+              }
+            } else {
+              // Grace: ignore 2 short dips so a flashy meter still accumulates.
+              state.belowFrames += 1;
+              if (state.belowFrames > 2) {
+                if (state.aboveMs > 0) {
+                  log(`hold reset · rms=${level.toFixed(3)} < thr=${state.threshold.toFixed(3)} after ${Math.round(state.aboveMs)}ms`);
+                }
+                state.aboveMs = 0;
+                state.crossedLogged = false;
+                setStatus("Agent speaking — talk and HOLD above orange until bar fills", "speak");
+              }
+            }
+          }
+        } else if (!state.barged) {
+          state.aboveMs = 0;
+          state.belowFrames = 0;
+        }
+
+        els.holdBar.style.width = `${Math.min(100, (state.aboveMs / need) * 100)}%`;
+        els.live.textContent =
+          `rms=${level.toFixed(3)} peak=${state.histPeak.toFixed(3)} thr=${state.threshold.toFixed(3)} ` +
+          `held=${Math.round(state.aboveMs)}/${need}ms ` +
+          `maxAbove=${Math.round(state.maxAboveMs)}ms ` +
+          `AEC=${state.aecEnabled ? "on" : "off"}`;
+
+        state.raf = requestAnimationFrame(tick);
+      };
+      state.raf = requestAnimationFrame(tick);
+    }
+
+    async function enableMic() {
+      await openMic();
+      meterLoop();
+      els.talkBtn.disabled = false;
+      els.stopBtn.disabled = false;
+      els.aecBtn.disabled = false;
+      els.resetPeakBtn.disabled = false;
+      els.setFromPeakBtn.disabled = false;
+      resetHistPeak("mic enable");
+      if (!els.autoThr.checked) applyManualThreshold();
+      setStatus(state.aecEnabled ? "Mic ready (AEC on)" : "Mic ready (AEC OFF)", "listen");
+    }
+
+    async function toggleAec() {
+      const resumeTalk = state.speaking;
+      if (resumeTalk) {
+        state.barged = false;
+        stopAgent("aec toggle");
+      }
+      state.aecEnabled = !state.aecEnabled;
+      updateAecBtn();
+      setStatus("Re-acquiring mic…", "");
+      try {
+        await openMic();
+        resetHistPeak("aec toggle");
+        meterLoop();
+        setStatus(
+          state.aecEnabled
+            ? "AEC ON — agent should stay low on the meter"
+            : "AEC OFF — agent echo should flood the green meter",
+          "listen"
+        );
+        if (resumeTalk) agentTalk();
+      } catch (err) {
+        setStatus(`Mic failed: ${err.message}`, "");
+        log(String(err));
+      }
+    }
+
+    function stopAgent(reason) {
+      speechSynthesis.cancel();
+      state.speaking = false;
+      state.aboveMs = 0;
+      state.belowFrames = 0;
+      state.crossedLogged = false;
+      els.holdBar.style.width = "0%";
+      log(`agent stopped (${reason})`);
+    }
+
+    function bargeIn(detail) {
+      if (state.barged) return;
+      state.barged = true;
+      stopAgent("barge-in");
+      setStatus(`BARGE-IN — agent cut off. ${detail}`, "barge");
+      log(`BARGE-IN ${detail}`);
+    }
+
+    function agentTalk() {
+      if (!window.speechSynthesis) {
+        setStatus("speechSynthesis not available", "");
+        return;
+      }
+      speechSynthesis.cancel();
+      state.barged = false;
+      state.aboveMs = 0;
+      state.belowFrames = 0;
+      state.crossedLogged = false;
+      state.baseline = 0.01;
+      recomputeThreshold();
+      state.calibUntil = performance.now() + 700;
+      state.speaking = true;
+      updateHud();
+
+      const u = new SpeechSynthesisUtterance(SCRIPT);
+      u.rate = 1.05;
+      u.volume = 1;
+      const voices = speechSynthesis.getVoices();
+      const en = voices.find((v) => /en(-|_)US/i.test(v.lang) && /Google|Natural|Samantha|Jenny/i.test(v.name))
+        || voices.find((v) => /^en/i.test(v.lang));
+      if (en) u.voice = en;
+      u.onstart = () => {
+        setStatus("Agent speaking — stay above orange until hold bar fills", "speak");
+        log("agent TTS started");
+      };
+      u.onend = () => {
+        if (!state.barged) {
+          state.speaking = false;
+          setStatus("No barge-in — hold longer above orange (not just a flash)", "listen");
+          log("agent TTS finished without barge-in");
+        }
+      };
+      u.onerror = (e) => {
+        if (e.error !== "interrupted") log(`TTS error ${e.error}`);
+        if (!state.barged) state.speaking = false;
+      };
+      speechSynthesis.speak(u);
+    }
+
+    els.thr.addEventListener("input", () => {
+      if (els.autoThr.checked) return;
+      applyManualThreshold();
+    });
+    els.autoThr.addEventListener("change", () => syncAutoUi());
+    els.setFromPeakBtn.addEventListener("click", () => {
+      if (state.histPeak <= 0) {
+        log("no peak yet — speak first");
+        return;
+      }
+      els.autoThr.checked = false;
+      syncAutoUi();
+      const next = Math.max(0.002, Math.min(0.04, Math.round(state.histPeak * 0.7 * 1000) / 1000));
+      els.thr.value = String(next);
+      applyManualThreshold();
+      log(`thr set to 70% of peak ${state.histPeak.toFixed(3)} → ${next.toFixed(3)}`);
+    });
+    els.sens.addEventListener("input", () => {
+      els.sensVal.textContent = els.sens.value;
+      if (els.autoThr.checked) {
+        recomputeThreshold();
+        updateHud();
+      }
+    });
+    els.hold.addEventListener("input", () => {
+      els.holdVal.textContent = els.hold.value;
+      updateHud();
+    });
+    els.startBtn.addEventListener("click", async () => {
+      try {
+        els.startBtn.disabled = true;
+        await enableMic();
+      } catch (err) {
+        els.startBtn.disabled = false;
+        setStatus(`Mic failed: ${err.message}`, "");
+        log(String(err));
+      }
+    });
+    els.talkBtn.addEventListener("click", () => agentTalk());
+    els.stopBtn.addEventListener("click", () => {
+      state.barged = false;
+      stopAgent("manual stop");
+      setStatus("Stopped", "listen");
+    });
+    els.aecBtn.addEventListener("click", () => toggleAec());
+    els.resetPeakBtn.addEventListener("click", () => resetHistPeak("manual"));
+
+    speechSynthesis.getVoices();
+    speechSynthesis.onvoiceschanged = () => speechSynthesis.getVoices();
+    updateAecBtn();
+    syncAutoUi();
+    log("ready — set Threshold manually under your purple peak, then tell me the value that works");
+  </script>
+</body>
+</html>
